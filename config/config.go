@@ -95,6 +95,13 @@ type VADConfig struct {
 	// 0.05-0.3, so a noise-derived threshold above this ceiling can only be a
 	// mis-measurement, and letting it stand would discard the whole recording.
 	MaxThreshold float64 `toml:"max_threshold"`
+	// MinSpeechMs is how long the level must stay above the threshold before a
+	// frame run counts as speech. It debounces transients: a keyboard click or
+	// a breath crosses the threshold for one frame, and without this each such
+	// blip opened a new speech run that paid PreRollMs plus SilenceKeepMs of
+	// overhead. On an 80-second recording those blips produced 120 runs and ate
+	// roughly half the savings. Real speech sustains far longer than one frame.
+	MinSpeechMs int `toml:"min_speech_ms"`
 	// PreRollMs of dropped audio is retained and re-sent when speech starts, so
 	// the quiet onset of a word is not clipped.
 	PreRollMs int `toml:"pre_roll_ms"`
@@ -120,7 +127,7 @@ func Default() *Config {
 				Adaptive: true, AdaptiveWindowMs: 4000, NoiseFactor: 4.0,
 				MinThreshold: 0.0015, MaxThreshold: 0.05, Threshold: 0.004,
 				AutoCalibrate: false, CalibrateMs: 300,
-				PreRollMs: 200, SilenceKeepMs: 400, HeartbeatMs: 3000,
+				MinSpeechMs: 60, PreRollMs: 200, SilenceKeepMs: 400, HeartbeatMs: 3000,
 			},
 		},
 		Overlay: OverlayConfig{

@@ -71,9 +71,10 @@ type silenceGate struct {
 	frameBytes  int
 	threshold   float64
 
-	preRollFrames  int
-	keepFrames     int
-	heartbeatEvery int
+	preRollFrames   int
+	keepFrames      int
+	heartbeatEvery  int
+	minSpeechFrames int
 
 	calibrateFrames int
 	noiseFactor     float64
@@ -90,6 +91,7 @@ type silenceGate struct {
 	preBuf    [][]byte
 	speaking  bool
 	silentRun int
+	aboveRun  int
 
 	totalFrames     int
 	forwardedFrames int
@@ -144,6 +146,16 @@ func newSilenceGate(cfg config.VADConfig) *silenceGate {
 		maxThreshold:   maxThreshold,
 		minThreshold:   minThreshold,
 		adaptive:       cfg.Adaptive,
+	}
+	g.minSpeechFrames = msToFrames(cfg.MinSpeechMs, frameMs)
+	if g.minSpeechFrames < 1 {
+		g.minSpeechFrames = 1
+	}
+	// Candidate frames wait in the pre-roll buffer until speech is confirmed, so
+	// the buffer must be able to hold a whole debounce window or the beginning
+	// of every utterance would be dropped.
+	if g.preRollFrames < g.minSpeechFrames {
+		g.preRollFrames = g.minSpeechFrames
 	}
 	if cfg.AutoCalibrate {
 		g.calibrateFrames = msToFrames(cfg.CalibrateMs, frameMs)
@@ -227,17 +239,30 @@ func (g *silenceGate) classify(frame []byte) []byte {
 	}
 
 	if level >= g.threshold {
-		g.silentRun = 0
-		g.speechFrames++
+		g.aboveRun++
 		if g.speaking {
+			g.speechFrames++
 			return g.forward(frame)
 		}
-		g.speaking = true
-		g.speechRuns++
-		return g.forward(g.drainPreRoll(frame))
+		if g.aboveRun >= g.minSpeechFrames {
+			g.speaking = true
+			g.speechRuns++
+			g.speechFrames++
+			g.silentRun = 0
+			return g.forward(g.drainPreRoll(frame))
+		}
+		// A candidate, not yet speech. It waits in the pre-roll buffer, and
+		// crucially does not reset silentRun: a single click during a long pause
+		// must not restart the silence-lead window and undo the saving.
+		g.rememberPreRoll(frame)
+		return nil
 	}
 
-	g.speaking = false
+	g.aboveRun = 0
+	if g.speaking {
+		g.speaking = false
+		g.silentRun = 0
+	}
 	g.silentRun++
 	// The lead of a pause is a boundary marker the server needs; the heartbeat
 	// keeps a long pause from looking like a dead connection.

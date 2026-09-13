@@ -4,6 +4,8 @@ All notable project changes are tracked here.
 
 ## Unreleased
 
+- Silence gating now debounces speech onset with `min_speech_ms`. A single loud frame from a keyboard click or a breath used to open a new speech run, and each run paid pre-roll and silence-lead overhead; on an 80-second recording containing a 60-second pause those transients produced 120 runs and consumed about half the available saving.
+
 - Added opt-in client-side silence gating for streaming ASR. Near-silent frames are withheld before upload, which reduces duration-billed recognition cost. A pre-roll buffer re-sends the quiet onset of a word so beginnings are not clipped, the lead of every pause is still uploaded so the recognizer keeps the boundary it needs to punctuate, an optional calibration window adapts the threshold to the room's noise floor, and a heartbeat keeps long pauses from looking like an idle connection. Threshold calibration estimates the noise floor from the quietest frame in its window and is capped by `max_threshold`, so a user who is already speaking when recording starts cannot produce a threshold above real speech. A `measure_only` mode reports levels and potential savings while still uploading everything. Configured under `[voice.vad]` and disabled by default.
 - Add a responsive Chinese project introduction website with a simulated recording and R-triggered retry demo, platform-specific launch commands, static HTTP preview on port 7788, and automated GitHub Pages deployment linked from both READMEs.
 

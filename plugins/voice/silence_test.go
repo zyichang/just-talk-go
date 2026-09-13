@@ -497,6 +497,66 @@ func TestGateAdaptiveTrimsLongPauseNotShortGaps(t *testing.T) {
 	}
 }
 
+// Debouncing is what stopped transients from shredding a long pause into many
+// short speech runs, each paying pre-roll and silence-lead overhead.
+func TestGateDebounceIgnoresTransientBlips(t *testing.T) {
+	cfg := testVAD()
+	cfg.MinSpeechMs = 60 // three frames
+	cfg.SilenceKeepMs = 100
+	gate := newSilenceGate(cfg)
+
+	// A long pause interrupted by single-frame clicks, as a keyboard or a breath
+	// would produce.
+	for i := 0; i < 10; i++ {
+		gate.Filter(silentPCM(20))
+		gate.Filter(tonePCM(1, 0.3)) // one loud frame only
+	}
+
+	s := gate.Summarize()
+	if s.SpeechRuns != 0 {
+		t.Fatalf("speech runs = %d, want 0: single frames must not open a run", s.SpeechRuns)
+	}
+	// Without debouncing each blip reopened the keep window and almost nothing
+	// was saved. The pause must now be withheld.
+	if s.WithheldRatio < 0.8 {
+		t.Fatalf("withheld ratio = %v, want over 0.8 across a click-interrupted pause",
+			s.WithheldRatio)
+	}
+}
+
+func TestGateDebounceStillAcceptsRealSpeech(t *testing.T) {
+	cfg := testVAD()
+	cfg.MinSpeechMs = 60 // three frames
+	gate := newSilenceGate(cfg)
+
+	out := gate.Filter(tonePCM(20, 0.3))
+	// All twenty frames must reach the server: the two candidate frames that
+	// preceded confirmation are recovered from the pre-roll buffer.
+	if got := len(out) / frameBytesFor(testFrameMs); got != 20 {
+		t.Fatalf("forwarded %d frames of 20 — the debounce lost the start of speech", got)
+	}
+	if s := gate.Summarize(); s.SpeechRuns != 1 {
+		t.Fatalf("speech runs = %d, want 1", s.SpeechRuns)
+	}
+}
+
+func TestGateDebounceNeverStarvesPreRoll(t *testing.T) {
+	cfg := testVAD()
+	cfg.MinSpeechMs = 200 // ten frames
+	cfg.PreRollMs = 20    // one frame, deliberately too small
+	gate := newSilenceGate(cfg)
+
+	if gate.preRollFrames < gate.minSpeechFrames {
+		t.Fatalf("pre-roll %d frames is smaller than the %d-frame debounce window",
+			gate.preRollFrames, gate.minSpeechFrames)
+	}
+	// Confirmed speech must still arrive whole.
+	out := gate.Filter(tonePCM(15, 0.3))
+	if got := len(out) / frameBytesFor(testFrameMs); got != 15 {
+		t.Fatalf("forwarded %d frames of 15", got)
+	}
+}
+
 func BenchmarkFrameRMS20ms(b *testing.B) {
 	frame := tonePCM(1, 0.3)
 	b.SetBytes(int64(len(frame)))

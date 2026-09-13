@@ -195,6 +195,7 @@ max_threshold = 0.05     # ceiling on the threshold; speech is 0.05-0.3
 threshold = 0.004        # fixed threshold, used when adaptive = false
 auto_calibrate = false   # legacy: calibrate once from the first 300 ms. Superseded by adaptive
 calibrate_ms = 300       # window for auto_calibrate
+min_speech_ms = 60       # how long the level must stay high to count as speech; debounces clicks and breaths
 pre_roll_ms = 200        # silence re-sent at speech onset, so word beginnings survive
 silence_keep_ms = 400    # lead of each pause kept, protecting word tails and punctuation
 heartbeat_ms = 3000      # frame interval through long pauses, so the connection is not idle. 0 disables

@@ -195,6 +195,7 @@ max_threshold = 0.05     # 阈值上限。说话音量在 0.05~0.3，超过上�
 threshold = 0.004        # adaptive = false 时使用的固定阈值
 auto_calibrate = false   # 旧方案：只用录音开头 300ms 校准一次。已被 adaptive 取代
 calibrate_ms = 300       # auto_calibrate 的窗口长度
+min_speech_ms = 60       # 连续超过阈值多久才算说话，用于过滤键盘声、呼吸等瞬时噪声
 pre_roll_ms = 200        # 说话开始时补发的静音，避免切掉字头
 silence_keep_ms = 400    # 每段停顿保留的开头长度，保护字尾和标点
 heartbeat_ms = 3000      # 长停顿中的心跳间隔，防止连接被判定空闲。0 关闭

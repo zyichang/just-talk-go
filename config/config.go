@@ -30,19 +30,24 @@ type OverlayConfig struct {
 }
 
 type VoiceConfig struct {
-	Enabled     bool      `toml:"enabled"`
-	Mode        string    `toml:"mode"`
-	PushToTalk  string    `toml:"push_to_talk"`
-	Device      string    `toml:"device"`
-	Gain        int       `toml:"gain"`
-	StopDelayMs int       `toml:"stop_delay_ms"`
-	Language    string    `toml:"language"`
-	AutoSubmit  bool      `toml:"auto_submit"`
-	AppKey      string    `toml:"app_key"`
-	AccessKey   string    `toml:"access_key"`
-	ResourceID  string    `toml:"resource_id"`
-	Hotwords    []string  `toml:"hotwords"`
-	VAD         VADConfig `toml:"vad"`
+	Enabled     bool     `toml:"enabled"`
+	Mode        string   `toml:"mode"`
+	PushToTalk  string   `toml:"push_to_talk"`
+	Device      string   `toml:"device"`
+	Gain        int      `toml:"gain"`
+	StopDelayMs int      `toml:"stop_delay_ms"`
+	Language    string   `toml:"language"`
+	AutoSubmit  bool     `toml:"auto_submit"`
+	AppKey      string   `toml:"app_key"`
+	AccessKey   string   `toml:"access_key"`
+	ResourceID  string   `toml:"resource_id"`
+	Hotwords    []string `toml:"hotwords"`
+	// SmoothText asks the recognizer to drop disfluencies: filler words, hesitation
+	// sounds and repeated phrases. It maps to the API's enable_ddc. Dictation into
+	// a machine rarely needs them, but they carry hesitation, so this is off by
+	// default. It is text post-processing and does not affect billed audio duration.
+	SmoothText bool      `toml:"smooth_text"`
+	VAD        VADConfig `toml:"vad"`
 }
 
 // VADConfig controls client-side silence gating. Streaming ASR is billed by

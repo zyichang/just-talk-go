@@ -172,6 +172,15 @@ Hotword example:
 hotwords = ["Wayland", "Sway", "wl-copy", "wtype", "just-talk-go"]
 ```
 
+Dropping disfluencies:
+
+The recognizer can strip filler words, hesitation sounds and repeated phrases from its output. Dictation into a machine rarely needs them, but they do carry hesitation, so this is off by default. It is text post-processing and **does not affect duration-based billing**.
+
+```toml
+[voice]
+smooth_text = true
+```
+
 Silence gating (reduces streaming recognition cost):
 
 Streaming ASR is billed by audio duration, so pauses inside a recording cost money too. With silence gating enabled, audio below the level threshold is withheld before upload and only speech reaches the server. Disabled by default.

@@ -253,7 +253,9 @@ func TestGateSummaryReportsLevels(t *testing.T) {
 // ones on the speech cluster, which is what makes the valley between them
 // visible.
 func TestGateSummaryReportsPercentiles(t *testing.T) {
-	gate := newSilenceGate(testVAD())
+	cfg := testVAD()
+	cfg.MeasureOnly = true // percentiles need the retained samples
+	gate := newSilenceGate(cfg)
 
 	gate.Filter(silentPCM(50))
 	gate.Filter(tonePCM(50, 0.4))
@@ -554,6 +556,59 @@ func TestGateDebounceNeverStarvesPreRoll(t *testing.T) {
 	out := gate.Filter(tonePCM(15, 0.3))
 	if got := len(out) / frameBytesFor(testFrameMs); got != 15 {
 		t.Fatalf("forwarded %d frames of 15", got)
+	}
+}
+
+func TestGateLevelsOnlyRetainedWhileMeasuring(t *testing.T) {
+	// Everyday path: no per-frame levels are kept.
+	plain := newSilenceGate(testVAD())
+	plain.Filter(tonePCM(50, 0.3))
+	if len(plain.levels) != 0 {
+		t.Errorf("retained %d levels with measure_only off, want 0", len(plain.levels))
+	}
+	// The mean is derived from a running sum, so it still works.
+	if s := plain.Summarize(); s.MeanLevel <= 0 {
+		t.Errorf("mean level = %v, want it still reported", s.MeanLevel)
+	}
+	// Percentiles are unavailable without the samples, which is the trade.
+	if s := plain.Summarize(); s.P50 != 0 {
+		t.Errorf("p50 = %v, want 0 when levels are not collected", s.P50)
+	}
+
+	// Measuring path: levels are kept so percentiles can be computed.
+	cfg := testVAD()
+	cfg.MeasureOnly = true
+	measuring := newSilenceGate(cfg)
+	measuring.Filter(tonePCM(50, 0.3))
+	if len(measuring.levels) != 50 {
+		t.Errorf("retained %d levels while measuring, want 50", len(measuring.levels))
+	}
+	if s := measuring.Summarize(); s.P50 <= 0 {
+		t.Errorf("p50 = %v, want a real percentile while measuring", s.P50)
+	}
+}
+
+func TestGateShadowsDoNotRetainLevels(t *testing.T) {
+	cfg := testVAD()
+	cfg.MeasureOnly = true
+	cfg.SweepThresholds = []float64{0.002, 0.05}
+	gate := newSilenceGate(cfg)
+	gate.Filter(tonePCM(50, 0.3))
+
+	if len(gate.shadows) != 2 {
+		t.Fatalf("got %d shadows, want 2", len(gate.shadows))
+	}
+	for i, s := range gate.shadows {
+		if len(s.levels) != 0 {
+			t.Errorf("shadow %d retained %d levels, want 0", i, len(s.levels))
+		}
+		if len(s.shadows) != 0 {
+			t.Errorf("shadow %d spawned its own shadows", i)
+		}
+	}
+	// Projections must still be reported.
+	if len(gate.Projections()) != 2 {
+		t.Error("projections were lost")
 	}
 }
 

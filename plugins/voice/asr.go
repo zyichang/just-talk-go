@@ -19,6 +19,7 @@ type ASRConfig struct {
 	ResourceID string
 	Language   string
 	Hotwords   []string
+	SmoothText bool
 }
 
 type ASRClient struct {
@@ -142,7 +143,7 @@ func (c *ASRClient) Close() error {
 func (c *ASRClient) sendFullClientRequest(ctx context.Context) error {
 	request := map[string]interface{}{
 		"model_name": "bigmodel", "enable_itn": true, "enable_punc": true,
-		"enable_ddc": false, "enable_word": false,
+		"enable_ddc": c.cfg.SmoothText, "enable_word": false,
 		"enable_nonstream": true, "result_type": "full", "show_utterances": true,
 	}
 	if len(c.cfg.Hotwords) > 0 {

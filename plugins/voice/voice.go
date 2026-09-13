@@ -534,7 +534,8 @@ func (p *VoicePlugin) startRecording() {
 		return
 	}
 	vc := p.cfg.Voice
-	asrCfg := ASRConfig{AppKey: vc.AppKey, AccessKey: vc.AccessKey, ResourceID: vc.ResourceID, Language: vc.Language, Hotwords: vc.Hotwords}
+	asrCfg := ASRConfig{AppKey: vc.AppKey, AccessKey: vc.AccessKey, ResourceID: vc.ResourceID,
+		Language: vc.Language, Hotwords: vc.Hotwords, SmoothText: vc.SmoothText}
 	if asrCfg.ResourceID == "" {
 		asrCfg.ResourceID = "volc.bigasr.sauc.duration"
 	}

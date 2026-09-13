@@ -87,6 +87,17 @@ type silenceGate struct {
 	adaptive     bool
 	floorCurrent float64
 
+	// collectLevels is only set for the gate that reports percentiles. Storing a
+	// level per frame costs a float64 every 20 ms, which is 240 KB across a
+	// ten-minute recording and useful only while tuning a threshold, so the
+	// everyday path allocates nothing.
+	collectLevels bool
+
+	// outBuf is reused across calls so a steady stream allocates nothing. The
+	// slice Filter returns aliases it, and is therefore only valid until the
+	// next call — the caller writes it to the socket before reading more audio.
+	outBuf []byte
+
 	pending   []byte
 	preBuf    [][]byte
 	speaking  bool
@@ -146,6 +157,7 @@ func newSilenceGate(cfg config.VADConfig) *silenceGate {
 		maxThreshold:   maxThreshold,
 		minThreshold:   minThreshold,
 		adaptive:       cfg.Adaptive,
+		collectLevels:  cfg.MeasureOnly,
 	}
 	g.minSpeechFrames = msToFrames(cfg.MinSpeechMs, frameMs)
 	if g.minSpeechFrames < 1 {
@@ -172,6 +184,9 @@ func newSilenceGate(cfg config.VADConfig) *silenceGate {
 			}
 			shadow := cfg
 			shadow.SweepThresholds = nil
+			// Shadows only report ratios and run counts, never percentiles, so
+			// they neither spawn further shadows nor retain per-frame levels.
+			shadow.MeasureOnly = false
 			shadow.Threshold = t
 			shadow.AutoCalibrate = false
 			g.shadows = append(g.shadows, newSilenceGate(shadow))
@@ -192,7 +207,7 @@ func (g *silenceGate) Filter(chunk []byte) []byte {
 	}
 	g.pending = append(g.pending, chunk...)
 
-	var out []byte
+	out := g.outBuf[:0]
 	consumed := 0
 	for consumed+g.frameBytes <= len(g.pending) {
 		frame := g.pending[consumed : consumed+g.frameBytes]
@@ -209,6 +224,7 @@ func (g *silenceGate) Filter(chunk []byte) []byte {
 	// backing array does not grow without bound across a long session.
 	n := copy(g.pending, g.pending[consumed:])
 	g.pending = g.pending[:n]
+	g.outBuf = out
 
 	if g.measureOnly {
 		return chunk
@@ -290,7 +306,9 @@ func (g *silenceGate) observe(level float64) {
 		g.maxLevel = level
 	}
 	g.sumLevel += level
-	g.levels = append(g.levels, level)
+	if g.collectLevels {
+		g.levels = append(g.levels, level)
+	}
 }
 
 // trackFloor maintains the noise floor and re-derives the threshold from it.

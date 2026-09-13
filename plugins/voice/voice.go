@@ -319,7 +319,17 @@ func (p *VoicePlugin) Stop() error {
 	return nil
 }
 
-func (p *VoicePlugin) OnConfigReload(cfg *config.Config) error { return p.registerFromConfig(cfg) }
+// OnConfigReload refreshes the cached config before re-registering hotkeys.
+// The engine replaces its config object on every reload, so a pointer captured
+// during Init goes stale; without this refresh, settings read at recording time
+// (device, gain, keys, hotwords, silence gating) would keep their old values
+// until the process restarted.
+func (p *VoicePlugin) OnConfigReload(cfg *config.Config) error {
+	p.mu.Lock()
+	p.cfg = cfg
+	p.mu.Unlock()
+	return p.registerFromConfig(cfg)
+}
 
 func (p *VoicePlugin) registerFromConfig(cfg *config.Config) error {
 	vc := cfg.Voice
@@ -1016,6 +1026,32 @@ func asrConnectErrorDetail(err error) string {
 }
 
 func (p *VoicePlugin) streamAudio(ctx context.Context, rec *Recorder, client *ASRClient) {
+	p.mu.Lock()
+	var vadCfg config.VADConfig
+	if p.cfg != nil {
+		vadCfg = p.cfg.Voice.VAD
+	}
+	p.mu.Unlock()
+	gate := newSilenceGate(vadCfg)
+	if vadCfg.Enabled {
+		defer func() {
+			s := gate.Summarize()
+			p.logger.Info("silence gate summary",
+				"measure_only", vadCfg.MeasureOnly,
+				"frames", s.TotalFrames, "uploaded", s.ForwardedFrames,
+				"speech_frames", s.SpeechFrames, "speech_runs", s.SpeechRuns,
+				"withheld_ratio", s.WithheldRatio, "threshold", s.Threshold,
+				"noise_floor", s.NoiseFloor,
+				"lvl_min", s.MinLevel, "p10", s.P10, "p25", s.P25, "p50", s.P50,
+				"p75", s.P75, "p90", s.P90, "lvl_max", s.MaxLevel)
+			for _, pr := range gate.Projections() {
+				p.logger.Info("silence gate projection",
+					"threshold", pr.Threshold, "would_withhold", pr.WithheldRatio,
+					"speech_frames", pr.SpeechFrames, "speech_runs", pr.Runs)
+			}
+		}()
+	}
+
 	buf := make([]byte, 6400)
 	for {
 		select {
@@ -1025,14 +1061,18 @@ func (p *VoicePlugin) streamAudio(ctx context.Context, rec *Recorder, client *AS
 		}
 		n, err := rec.Read(buf)
 		if n > 0 {
-			sendCtx, sendCancel := context.WithTimeout(ctx, audioSendTimeout)
-			sendErr := client.SendAudio(sendCtx, buf[:n], false)
-			sendCancel()
-			if sendErr != nil {
-				if ctx.Err() == nil {
-					p.logger.Error("send audio error", "error", sendErr)
+			// A withheld frame is audio never billed; an empty payload means
+			// this whole read was silence and there is nothing to upload.
+			if payload := gate.Filter(buf[:n]); len(payload) > 0 {
+				sendCtx, sendCancel := context.WithTimeout(ctx, audioSendTimeout)
+				sendErr := client.SendAudio(sendCtx, payload, false)
+				sendCancel()
+				if sendErr != nil {
+					if ctx.Err() == nil {
+						p.logger.Error("send audio error", "error", sendErr)
+					}
+					return
 				}
-				return
 			}
 		}
 		if err == io.EOF || (err != nil && ctx.Err() != nil) {

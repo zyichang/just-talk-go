@@ -172,6 +172,45 @@ Hotword example:
 hotwords = ["Wayland", "Sway", "wl-copy", "wtype", "just-talk-go"]
 ```
 
+Silence gating (reduces streaming recognition cost):
+
+Streaming ASR is billed by audio duration, so pauses inside a recording cost money too. With silence gating enabled, audio below the level threshold is withheld before upload and only speech reaches the server. Disabled by default.
+
+```toml
+[voice.vad]
+enabled = true
+```
+
+Full settings, with the defaults used for anything omitted:
+
+```toml
+[voice.vad]
+enabled = false          # turn silence gating on
+measure_only = false     # gather statistics only: everything is still uploaded
+frame_ms = 20            # analysis frame size; 10-30 is the usual range
+adaptive = true          # track the noise floor continuously and derive the threshold (recommended)
+noise_factor = 4.0       # threshold = current noise floor x this factor
+min_threshold = 0.0015   # floor under the threshold, so noise is never taken for speech
+max_threshold = 0.05     # ceiling on the threshold; speech is 0.05-0.3
+threshold = 0.004        # fixed threshold, used when adaptive = false
+auto_calibrate = false   # legacy: calibrate once from the first 300 ms. Superseded by adaptive
+calibrate_ms = 300       # window for auto_calibrate
+pre_roll_ms = 200        # silence re-sent at speech onset, so word beginnings survive
+silence_keep_ms = 400    # lead of each pause kept, protecting word tails and punctuation
+heartbeat_ms = 3000      # frame interval through long pauses, so the connection is not idle. 0 disables
+sweep_thresholds = []    # measure_only: project several candidate thresholds at once
+```
+
+Why `adaptive` rather than a fixed threshold: on one real microphone the measured noise floor differed several times over between two consecutive recordings, as hardware noise cancellation or automatic gain engaged, so any fixed threshold is wrong for one of them. Calibrating once at the start of a recording is no better, because users begin speaking the moment they press the hotkey and that window contains nothing but speech. The adaptive floor falls instantly and rises very slowly, so genuine silence corrects it at once while speech cannot lift it.
+
+Reference levels: a quiet room sits near a normalized RMS of 0.001-0.01, speech near 0.05-0.3. If words go missing after enabling it, lower `threshold` or raise `pre_roll_ms`; if background noise is mistaken for speech, raise `threshold` or rely on `auto_calibrate`. When enabling this for the first time, run a few recordings with `measure_only = true`. In that mode all audio is still uploaded, so input cannot break, while the log reports your microphone's real level range to choose `threshold` against.
+
+After each recording the `silence gate summary` log line reports the observed levels and the fraction of frames withheld:
+
+```bash
+journalctl --user -u just-talk -n 20 | grep 'silence gate'
+```
+
 macOS hotkey example:
 
 ```toml

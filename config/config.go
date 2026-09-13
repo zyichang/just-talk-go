@@ -30,18 +30,84 @@ type OverlayConfig struct {
 }
 
 type VoiceConfig struct {
-	Enabled     bool     `toml:"enabled"`
-	Mode        string   `toml:"mode"`
-	PushToTalk  string   `toml:"push_to_talk"`
-	Device      string   `toml:"device"`
-	Gain        int      `toml:"gain"`
-	StopDelayMs int      `toml:"stop_delay_ms"`
-	Language    string   `toml:"language"`
-	AutoSubmit  bool     `toml:"auto_submit"`
-	AppKey      string   `toml:"app_key"`
-	AccessKey   string   `toml:"access_key"`
-	ResourceID  string   `toml:"resource_id"`
-	Hotwords    []string `toml:"hotwords"`
+	Enabled     bool      `toml:"enabled"`
+	Mode        string    `toml:"mode"`
+	PushToTalk  string    `toml:"push_to_talk"`
+	Device      string    `toml:"device"`
+	Gain        int       `toml:"gain"`
+	StopDelayMs int       `toml:"stop_delay_ms"`
+	Language    string    `toml:"language"`
+	AutoSubmit  bool      `toml:"auto_submit"`
+	AppKey      string    `toml:"app_key"`
+	AccessKey   string    `toml:"access_key"`
+	ResourceID  string    `toml:"resource_id"`
+	Hotwords    []string  `toml:"hotwords"`
+	VAD         VADConfig `toml:"vad"`
+}
+
+// VADConfig controls client-side silence gating. Streaming ASR is billed by
+// audio duration, so dropping near-silent audio before upload reduces cost.
+// Disabled by default: enabling it changes what the recognizer receives.
+type VADConfig struct {
+	// Enabled turns silence gating on. When false the audio stream is untouched.
+	Enabled bool `toml:"enabled"`
+	// MeasureOnly runs the gate for its statistics but uploads everything
+	// anyway. Use it to learn a microphone's real levels, and what the savings
+	// would be, without any risk of discarding speech.
+	MeasureOnly bool `toml:"measure_only"`
+	// FrameMs is the analysis frame size. 10-30 is the usual range; larger
+	// frames make the gate coarser and waste audio around speech edges.
+	FrameMs int `toml:"frame_ms"`
+	// Threshold is the normalized RMS level (0..1) at or above which a frame
+	// counts as speech. A quiet room sits near 0.001-0.01; speech near 0.05-0.3.
+	Threshold float64 `toml:"threshold"`
+	// AutoCalibrate raises Threshold to match the room's measured noise floor
+	// during the first CalibrateMs of each recording.
+	//
+	// Off by default, and superseded by Adaptive. A one-shot window almost
+	// always contains speech, because users start talking as soon as they press
+	// the hotkey, so the derived threshold varies wildly between sessions and
+	// can land high enough to reject every later frame.
+	AutoCalibrate bool `toml:"auto_calibrate"`
+	// Adaptive tracks the noise floor continuously as the quietest frame in a
+	// trailing window, and derives the threshold from it on every frame.
+	//
+	// This is the only scheme that survives real recordings. A fixed threshold
+	// breaks when the microphone's noise floor moves between sessions, which it
+	// does by several times over when hardware noise cancellation or automatic
+	// gain engages. One-shot calibration breaks when the user is already
+	// talking. A trailing minimum needs neither assumption: speech always
+	// leaves quiet gaps between words, so the recent minimum tracks the floor
+	// whether or not anyone is speaking.
+	Adaptive bool `toml:"adaptive"`
+	// AdaptiveWindowMs is the trailing window the noise floor is measured over.
+	// It must be long enough to always contain a gap between words.
+	AdaptiveWindowMs int `toml:"adaptive_window_ms"`
+	// MinThreshold floors the adaptive threshold, so an unnaturally quiet
+	// stretch cannot drive it low enough to treat noise as speech.
+	MinThreshold float64 `toml:"min_threshold"`
+	// CalibrateMs is the calibration window. Audio in it is always uploaded,
+	// because the user may already be speaking.
+	CalibrateMs int `toml:"calibrate_ms"`
+	// NoiseFactor multiplies the measured noise floor to derive the threshold.
+	NoiseFactor float64 `toml:"noise_factor"`
+	// MaxThreshold caps whatever calibration derives. Speech sits near
+	// 0.05-0.3, so a noise-derived threshold above this ceiling can only be a
+	// mis-measurement, and letting it stand would discard the whole recording.
+	MaxThreshold float64 `toml:"max_threshold"`
+	// PreRollMs of dropped audio is retained and re-sent when speech starts, so
+	// the quiet onset of a word is not clipped.
+	PreRollMs int `toml:"pre_roll_ms"`
+	// SilenceKeepMs of each pause is still uploaded, preserving the word tail
+	// and giving the recognizer the pause it needs to punctuate.
+	SilenceKeepMs int `toml:"silence_keep_ms"`
+	// HeartbeatMs forwards one frame at this interval through a long pause, so
+	// the server does not treat the connection as idle. 0 disables it.
+	HeartbeatMs int `toml:"heartbeat_ms"`
+	// SweepThresholds projects, in MeasureOnly mode, what each of these
+	// thresholds would have withheld. One recording then yields the whole
+	// trade-off curve instead of one point per recording. Ignored otherwise.
+	SweepThresholds []float64 `toml:"sweep_thresholds"`
 }
 
 func Default() *Config {
@@ -49,6 +115,13 @@ func Default() *Config {
 		Voice: VoiceConfig{
 			Enabled: true, Mode: "toggle", PushToTalk: "Alt+Super",
 			Language: "zh-CN", AutoSubmit: true, ResourceID: "volc.bigasr.sauc.duration",
+			VAD: VADConfig{
+				Enabled: false, FrameMs: 20,
+				Adaptive: true, AdaptiveWindowMs: 4000, NoiseFactor: 4.0,
+				MinThreshold: 0.0015, MaxThreshold: 0.05, Threshold: 0.004,
+				AutoCalibrate: false, CalibrateMs: 300,
+				PreRollMs: 200, SilenceKeepMs: 400, HeartbeatMs: 3000,
+			},
 		},
 		Overlay: OverlayConfig{
 			Enabled: true, Position: "bottom-center", IdleVisible: false, Scale: 1.0,

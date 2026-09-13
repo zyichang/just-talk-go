@@ -172,6 +172,45 @@ push_to_talk = "Alt+Super"
 hotwords = ["Wayland", "Sway", "wl-copy", "wtype", "just-talk-go"]
 ```
 
+静音裁剪（省流式识别费用）：
+
+流式语音识别按音频时长计费，所以录音里的停顿也会产生费用。开启静音裁剪后，音量低于阈值的音频在上传前被丢弃，只有说话的部分发给服务器。默认关闭。
+
+```toml
+[voice.vad]
+enabled = true
+```
+
+完整参数（未写出的项使用下列默认值）：
+
+```toml
+[voice.vad]
+enabled = false          # 是否开启静音裁剪
+measure_only = false     # 只统计不裁剪：照常全部上传，但日志给出音量和潜在省量
+frame_ms = 20            # 分析帧长度，常用 10~30
+adaptive = true          # 持续跟踪噪声底并据此推算阈值（推荐）
+noise_factor = 4.0       # 阈值 = 当前噪声底 × 该系数
+min_threshold = 0.0015   # 阈值下限，防止过静时把噪声当语音
+max_threshold = 0.05     # 阈值上限。说话音量在 0.05~0.3，超过上限只可能是测错了
+threshold = 0.004        # adaptive = false 时使用的固定阈值
+auto_calibrate = false   # 旧方案：只用录音开头 300ms 校准一次。已被 adaptive 取代
+calibrate_ms = 300       # auto_calibrate 的窗口长度
+pre_roll_ms = 200        # 说话开始时补发的静音，避免切掉字头
+silence_keep_ms = 400    # 每段停顿保留的开头长度，保护字尾和标点
+heartbeat_ms = 3000      # 长停顿中的心跳间隔，防止连接被判定空闲。0 关闭
+sweep_thresholds = []    # 仅 measure_only：同时投影多个候选阈值的效果
+```
+
+为什么默认用 `adaptive` 而不是固定阈值：实测同一支麦克风的噪声底在两次录音之间会相差数倍（硬件降噪或自动增益介入时），固定阈值对其中一次必然是错的。而只在录音开头校准一次同样不可靠 —— 用户按下热键就开口说话，那 300 毫秒里全是语音。`adaptive` 的噪声底瞬间下降、极慢上升，所以真正的静音能立刻校正它，而语音再响也来不及把它拽上去。
+
+参考音量：安静房间的归一化 RMS 大约在 0.001~0.01，说话大约在 0.05~0.3。如果开启后出现漏字，把 `threshold` 调低或把 `pre_roll_ms` 调大；如果背景噪声被误判成说话，把 `threshold` 调高或依赖 `auto_calibrate`。第一次启用建议先用 `measure_only = true` 跑几次。这个模式下音频照常全部上传（输入不会坏），但日志会给出你麦克风的真实音量范围，据此再决定 `threshold`。
+
+每次录音结束后，日志里的 `silence gate summary` 会给出音量统计和丢弃比例：
+
+```bash
+journalctl --user -u just-talk -n 20 | grep 'silence gate'
+```
+
 macOS 热键写法：
 
 ```toml

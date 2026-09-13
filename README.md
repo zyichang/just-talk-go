@@ -208,7 +208,8 @@ min_speech_ms = 60       # 连续超过阈值多久才算说话，用于过滤�
 pre_roll_ms = 200        # 说话开始时补发的静音，避免切掉字头
 silence_keep_ms = 400    # 每段停顿保留的开头长度，保护字尾和标点
 heartbeat_ms = 3000      # 长停顿中的心跳间隔，防止连接被判定空闲。0 关闭
-silence_stop_ms = 0      # 静音超过这么久就自动结束录音。0 关闭；即使 enabled = false 也生效
+silence_stop_ms = 0      # 尾随窗口长度：这段时间内几乎没有语音就自动结束录音。0 关闭；即使 enabled = false 也生效
+silence_stop_max_speech_pct = 15  # 窗口内语音帧占比低于该值即视为静音
 sweep_thresholds = []    # 仅 measure_only：同时投影多个候选阈值的效果
 ```
 

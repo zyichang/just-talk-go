@@ -76,7 +76,17 @@ type silenceGate struct {
 	keepFrames      int
 	heartbeatEvery  int
 	minSpeechFrames int
-	silenceStopAt   int
+
+	// Auto-stop watches how much of a trailing window was speech, not how many
+	// frames of silence ran back to back. Measured in a real room, a deliberate
+	// 30-second silence never produced more than 5.3 s uninterrupted: breathing
+	// and small movements cross the threshold every few seconds. Density is
+	// indifferent to that fragmentation, which is what defeats a run-length rule.
+	stopWindow   []bool
+	stopWindowAt int
+	stopFilled   bool
+	stopSpeech   int
+	stopMaxPct   int
 
 	calibrateFrames int
 	noiseFactor     float64
@@ -110,6 +120,7 @@ type silenceGate struct {
 	forwardedFrames int
 	speechFrames    int
 	speechRuns      int
+	maxSilentRun    int
 	minLevel        float64
 	maxLevel        float64
 	sumLevel        float64
@@ -155,12 +166,19 @@ func newSilenceGate(cfg config.VADConfig) *silenceGate {
 		preRollFrames:  msToFrames(cfg.PreRollMs, frameMs),
 		keepFrames:     msToFrames(cfg.SilenceKeepMs, frameMs),
 		heartbeatEvery: msToFrames(cfg.HeartbeatMs, frameMs),
-		silenceStopAt:  msToFrames(cfg.SilenceStopMs, frameMs),
-		noiseFactor:    noiseFactor,
-		maxThreshold:   maxThreshold,
-		minThreshold:   minThreshold,
-		adaptive:       cfg.Adaptive,
-		collectLevels:  cfg.MeasureOnly,
+
+		noiseFactor:   noiseFactor,
+		maxThreshold:  maxThreshold,
+		minThreshold:  minThreshold,
+		adaptive:      cfg.Adaptive,
+		collectLevels: cfg.MeasureOnly,
+	}
+	if window := msToFrames(cfg.SilenceStopMs, frameMs); window > 0 {
+		g.stopWindow = make([]bool, window)
+		g.stopMaxPct = cfg.SilenceStopMaxSpeechPct
+		if g.stopMaxPct <= 0 {
+			g.stopMaxPct = 15
+		}
 	}
 	g.minSpeechFrames = msToFrames(cfg.MinSpeechMs, frameMs)
 	if g.minSpeechFrames < 1 {
@@ -240,26 +258,36 @@ func (g *silenceGate) Filter(chunk []byte) []byte {
 // active reports whether any frame-level work is wanted. Silence timing needs
 // classification even when filtering is switched off.
 func (g *silenceGate) active() bool {
-	return g.enabled || g.measureOnly || g.silenceStopAt > 0
+	return g.enabled || g.measureOnly || len(g.stopWindow) > 0
 }
 
-// SilenceExceeded reports that the level has stayed below the threshold for
-// longer than SilenceStopMs, so the recording should end.
+// SilenceExceeded reports that the trailing window holds so little speech that
+// the recording should end. The window must fill first, so a session is never
+// cut short at its start.
 func (g *silenceGate) SilenceExceeded() bool {
-	return g.silenceStopAt > 0 && g.silentRun >= g.silenceStopAt
+	if len(g.stopWindow) == 0 || !g.stopFilled {
+		return false
+	}
+	return g.stopSpeech*100 <= g.stopMaxPct*len(g.stopWindow)
 }
 
 // SilentFor reports how long the current run of silence has lasted.
 func (g *silenceGate) SilentFor() time.Duration {
+	return g.framesToDuration(g.silentRun)
+}
+
+// framesToDuration converts a frame count to wall-clock audio time.
+func (g *silenceGate) framesToDuration(frames int) time.Duration {
 	if g.frameBytes <= 0 {
 		return 0
 	}
 	perFrame := time.Duration(g.frameBytes) * time.Second /
 		time.Duration(pcmSampleRate*pcmBytesPerSample)
-	return time.Duration(g.silentRun) * perFrame
+	return time.Duration(frames) * perFrame
 }
 
-// classify decides the fate of exactly one frame.
+// classify decides the fate of exactly one frame and records it against the
+// auto-stop window.
 func (g *silenceGate) classify(frame []byte) []byte {
 	g.totalFrames++
 	level := frameRMS(frame)
@@ -267,6 +295,13 @@ func (g *silenceGate) classify(frame []byte) []byte {
 	if g.adaptive {
 		g.trackFloor(level)
 	}
+	out, speech := g.decide(frame, level)
+	g.noteDensity(speech)
+	return out
+}
+
+// decide returns the frame's payload and whether it counted as speech.
+func (g *silenceGate) decide(frame []byte, level float64) ([]byte, bool) {
 
 	// Calibration window: estimate the room's noise floor. Everything is
 	// forwarded during it, because the user may already be speaking.
@@ -278,27 +313,27 @@ func (g *silenceGate) classify(frame []byte) []byte {
 		if g.calFrames >= g.calibrateFrames {
 			g.finishCalibration()
 		}
-		return g.forward(frame)
+		return g.forward(frame), false
 	}
 
 	if level >= g.threshold {
 		g.aboveRun++
 		if g.speaking {
 			g.speechFrames++
-			return g.forward(frame)
+			return g.forward(frame), true
 		}
 		if g.aboveRun >= g.minSpeechFrames {
 			g.speaking = true
 			g.speechRuns++
 			g.speechFrames++
 			g.silentRun = 0
-			return g.forward(g.drainPreRoll(frame))
+			return g.forward(g.drainPreRoll(frame)), true
 		}
 		// A candidate, not yet speech. It waits in the pre-roll buffer, and
 		// crucially does not reset silentRun: a single click during a long pause
 		// must not restart the silence-lead window and undo the saving.
 		g.rememberPreRoll(frame)
-		return nil
+		return nil, false
 	}
 
 	g.aboveRun = 0
@@ -307,16 +342,47 @@ func (g *silenceGate) classify(frame []byte) []byte {
 		g.silentRun = 0
 	}
 	g.silentRun++
+	if g.silentRun > g.maxSilentRun {
+		g.maxSilentRun = g.silentRun
+	}
 	// The lead of a pause is a boundary marker the server needs; the heartbeat
 	// keeps a long pause from looking like a dead connection.
 	if g.silentRun <= g.keepFrames {
-		return g.forward(frame)
+		return g.forward(frame), false
 	}
 	if g.heartbeatEvery > 0 && g.silentRun%g.heartbeatEvery == 0 {
-		return g.forward(frame)
+		return g.forward(frame), false
 	}
 	g.rememberPreRoll(frame)
-	return nil
+	return nil, false
+}
+
+// noteDensity slides the trailing auto-stop window by one frame, keeping the
+// speech count current in O(1).
+func (g *silenceGate) noteDensity(speech bool) {
+	if len(g.stopWindow) == 0 {
+		return
+	}
+	if g.stopWindow[g.stopWindowAt] {
+		g.stopSpeech--
+	}
+	g.stopWindow[g.stopWindowAt] = speech
+	if speech {
+		g.stopSpeech++
+	}
+	g.stopWindowAt++
+	if g.stopWindowAt >= len(g.stopWindow) {
+		g.stopWindowAt = 0
+		g.stopFilled = true
+	}
+}
+
+// SpeechDensity reports what percentage of the trailing window was speech.
+func (g *silenceGate) SpeechDensity() int {
+	if len(g.stopWindow) == 0 {
+		return 0
+	}
+	return g.stopSpeech * 100 / len(g.stopWindow)
 }
 
 // observe records level statistics for the session summary, which is the only
@@ -461,6 +527,7 @@ type Summary struct {
 	ForwardedFrames int
 	SpeechFrames    int
 	SpeechRuns      int
+	LongestSilence  time.Duration
 	WithheldRatio   float64
 	Threshold       float64
 	NoiseFloor      float64
@@ -493,6 +560,7 @@ func (g *silenceGate) Summarize() Summary {
 		ForwardedFrames: g.forwardedFrames,
 		SpeechFrames:    g.speechFrames,
 		SpeechRuns:      g.speechRuns,
+		LongestSilence:  g.framesToDuration(g.maxSilentRun),
 		Threshold:       g.threshold,
 		NoiseFloor:      g.floorCurrent,
 		MinLevel:        g.minLevel,

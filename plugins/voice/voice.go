@@ -1041,6 +1041,7 @@ func (p *VoicePlugin) streamAudio(ctx context.Context, rec *Recorder, client *AS
 				"measure_only", vadCfg.MeasureOnly,
 				"frames", s.TotalFrames, "uploaded", s.ForwardedFrames,
 				"speech_frames", s.SpeechFrames, "speech_runs", s.SpeechRuns,
+				"longest_silence", s.LongestSilence,
 				"withheld_ratio", s.WithheldRatio, "threshold", s.Threshold,
 				"noise_floor", s.NoiseFloor,
 				"lvl_min", s.MinLevel, "p10", s.P10, "p25", s.P25, "p50", s.P50,
@@ -1079,8 +1080,9 @@ func (p *VoicePlugin) streamAudio(ctx context.Context, rec *Recorder, client *AS
 			// hotkey uses, which already guards against stopping twice and marks
 			// the session user-stopped so its final text is still dispatched.
 			if gate.SilenceExceeded() {
-				p.logger.Info("auto-stop on silence", "silent_for", gate.SilentFor())
-				pout("🎤 静音 %s，自动停止", gate.SilentFor().Round(time.Second))
+				p.logger.Info("auto-stop on silence",
+					"speech_density_pct", gate.SpeechDensity())
+				pout("🎤 长时间无语音，自动停止")
 				p.startStopDelay()
 				return
 			}

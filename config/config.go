@@ -116,8 +116,8 @@ type VADConfig struct {
 	// HeartbeatMs forwards one frame at this interval through a long pause, so
 	// the server does not treat the connection as idle. 0 disables it.
 	HeartbeatMs int `toml:"heartbeat_ms"`
-	// SilenceStopMs ends the recording automatically once the level has stayed
-	// below the threshold for this long. 0 disables it.
+	// SilenceStopMs ends the recording automatically once the trailing window of
+	// this length holds almost no speech. 0 disables it.
 	//
 	// It reuses the gate's threshold machinery, so it works whether or not
 	// Enabled is set: with Enabled off the gate still measures levels but
@@ -125,6 +125,17 @@ type VADConfig struct {
 	// the meter running, so this is the one setting that also helps when the
 	// recognizer is billed by wall-clock rather than by uploaded audio.
 	SilenceStopMs int `toml:"silence_stop_ms"`
+	// SilenceStopMaxSpeechPct is how much of that window may be speech and still
+	// count as silence. Defaults to 15.
+	//
+	// A run-length rule was tried first and does not work: measured in a real
+	// room, a deliberate 30-second silence never yielded more than 5.3 s
+	// uninterrupted, because breathing and small movements cross the threshold
+	// every few seconds. Density is unaffected by that fragmentation. In the same
+	// room, deliberate silence measured about 7% speech frames and ordinary
+	// talking about 32%, so the default sits between them, nearer the quiet end
+	// so that slow, pause-heavy dictation is never cut off.
+	SilenceStopMaxSpeechPct int `toml:"silence_stop_max_speech_pct"`
 	// SweepThresholds projects, in MeasureOnly mode, what each of these
 	// thresholds would have withheld. One recording then yields the whole
 	// trade-off curve instead of one point per recording. Ignored otherwise.

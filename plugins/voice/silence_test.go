@@ -3,7 +3,6 @@ package voice
 import (
 	"math"
 	"testing"
-	"time"
 
 	"github.com/c/just-talk-go/config"
 )
@@ -618,7 +617,7 @@ func TestGateShadowsDoNotRetainLevels(t *testing.T) {
 func TestGateSilenceStopWorksWithFilteringOff(t *testing.T) {
 	cfg := testVAD()
 	cfg.Enabled = false
-	cfg.SilenceStopMs = 200 // ten frames
+	cfg.SilenceStopMs = 200 // ten-frame window
 	gate := newSilenceGate(cfg)
 
 	// Audio must pass through completely untouched.
@@ -627,34 +626,57 @@ func TestGateSilenceStopWorksWithFilteringOff(t *testing.T) {
 		t.Fatalf("gate altered the upload with filtering off: %d bytes, want %d",
 			len(out), len(in))
 	}
+	// The window is not full yet, so nothing may trigger.
 	if gate.SilenceExceeded() {
-		t.Fatal("stopped after 100 ms, want it to wait for 200 ms")
+		t.Fatal("triggered before the window filled")
 	}
 
-	gate.Filter(silentPCM(5)) // ten frames total
+	gate.Filter(silentPCM(5)) // ten frames: window now full and all silent
 	if !gate.SilenceExceeded() {
-		t.Fatalf("did not trigger after %v of silence", gate.SilentFor())
-	}
-	if got := gate.SilentFor(); got != 200*time.Millisecond {
-		t.Errorf("silent for %v, want 200ms", got)
+		t.Fatalf("did not trigger on a fully silent window (density=%d%%)",
+			gate.SpeechDensity())
 	}
 }
 
-func TestGateSilenceStopResetsOnSpeech(t *testing.T) {
+// The rule that failed in practice required consecutive silence. Breathing and
+// small movements interrupt it every few seconds, so a deliberate 30-second
+// silence never accumulated 15 s in a row. Density must tolerate those blips.
+func TestGateSilenceStopToleratesBlips(t *testing.T) {
 	cfg := testVAD()
-	cfg.SilenceStopMs = 200 // ten frames
+	cfg.SilenceStopMs = 400 // twenty-frame window
+	cfg.SilenceStopMaxSpeechPct = 15
+	cfg.MinSpeechMs = 20 // one frame, so every blip counts as speech
 	gate := newSilenceGate(cfg)
 
-	gate.Filter(silentPCM(8))
-	gate.Filter(tonePCM(3, 0.3)) // speech interrupts the count
-	gate.Filter(silentPCM(8))
-	if gate.SilenceExceeded() {
-		t.Fatalf("triggered despite speech resetting the count (silent_for=%v)",
-			gate.SilentFor())
+	// Twenty frames holding two isolated blips: 10% speech, under the 15% limit.
+	for i := 0; i < 2; i++ {
+		gate.Filter(silentPCM(9))
+		gate.Filter(tonePCM(1, 0.3))
 	}
-	gate.Filter(silentPCM(3)) // now eleven consecutive silent frames
 	if !gate.SilenceExceeded() {
-		t.Fatal("did not trigger after the uninterrupted run")
+		t.Fatalf("blips defeated the rule (density=%d%%, want it to still count as silence)",
+			gate.SpeechDensity())
+	}
+}
+
+// Sustained talking must never be cut off, however fragmented it is.
+func TestGateSilenceStopDoesNotInterruptSpeech(t *testing.T) {
+	cfg := testVAD()
+	cfg.SilenceStopMs = 400 // twenty-frame window
+	cfg.SilenceStopMaxSpeechPct = 15
+	gate := newSilenceGate(cfg)
+
+	// Fragmented but real speech: roughly a third of frames, as measured while
+	// talking. Far above the limit, so it must not trigger.
+	for i := 0; i < 4; i++ {
+		gate.Filter(tonePCM(3, 0.3))
+		gate.Filter(silentPCM(7))
+	}
+	if gate.SilenceExceeded() {
+		t.Fatalf("cut off active speech (density=%d%%)", gate.SpeechDensity())
+	}
+	if d := gate.SpeechDensity(); d < 20 {
+		t.Errorf("density=%d%%, expected around 30%% for talking", d)
 	}
 }
 
@@ -663,6 +685,9 @@ func TestGateSilenceStopDisabledByDefault(t *testing.T) {
 	gate.Filter(silentPCM(5000)) // 100 seconds
 	if gate.SilenceExceeded() {
 		t.Fatal("triggered with silence_stop_ms unset")
+	}
+	if gate.SpeechDensity() != 0 {
+		t.Error("density reported without a window")
 	}
 }
 

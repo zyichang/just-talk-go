@@ -1034,7 +1034,7 @@ func (p *VoicePlugin) streamAudio(ctx context.Context, rec *Recorder, client *AS
 	}
 	p.mu.Unlock()
 	gate := newSilenceGate(vadCfg)
-	if vadCfg.Enabled {
+	if vadCfg.Enabled || vadCfg.MeasureOnly {
 		defer func() {
 			s := gate.Summarize()
 			p.logger.Info("silence gate summary",
@@ -1074,6 +1074,15 @@ func (p *VoicePlugin) streamAudio(ctx context.Context, rec *Recorder, client *AS
 					}
 					return
 				}
+			}
+			// Long enough silence ends the session through the same path the
+			// hotkey uses, which already guards against stopping twice and marks
+			// the session user-stopped so its final text is still dispatched.
+			if gate.SilenceExceeded() {
+				p.logger.Info("auto-stop on silence", "silent_for", gate.SilentFor())
+				pout("🎤 静音 %s，自动停止", gate.SilentFor().Round(time.Second))
+				p.startStopDelay()
+				return
 			}
 		}
 		if err == io.EOF || (err != nil && ctx.Err() != nil) {

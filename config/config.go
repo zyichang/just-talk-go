@@ -116,6 +116,15 @@ type VADConfig struct {
 	// HeartbeatMs forwards one frame at this interval through a long pause, so
 	// the server does not treat the connection as idle. 0 disables it.
 	HeartbeatMs int `toml:"heartbeat_ms"`
+	// SilenceStopMs ends the recording automatically once the level has stayed
+	// below the threshold for this long. 0 disables it.
+	//
+	// It reuses the gate's threshold machinery, so it works whether or not
+	// Enabled is set: with Enabled off the gate still measures levels but
+	// forwards every frame untouched. Ending the session is what actually stops
+	// the meter running, so this is the one setting that also helps when the
+	// recognizer is billed by wall-clock rather than by uploaded audio.
+	SilenceStopMs int `toml:"silence_stop_ms"`
 	// SweepThresholds projects, in MeasureOnly mode, what each of these
 	// thresholds would have withheld. One recording then yields the whole
 	// trade-off curve instead of one point per recording. Ignored otherwise.

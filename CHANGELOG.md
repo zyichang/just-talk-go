@@ -4,6 +4,8 @@ All notable project changes are tracked here.
 
 ## Unreleased
 
+- Added `silence_stop_ms`, which ends a recording automatically once the level has stayed below the threshold for that long. It routes through the same stop path as the hotkey, so a session is still marked user-stopped and its final text is dispatched exactly once. Works with `enabled = false`, in which case the gate measures levels but forwards every frame untouched.
+
 - Added `smooth_text`, which asks the recognizer to drop filler words, hesitation sounds and repeated phrases. Off by default. Text post-processing only, so duration-based billing is unaffected.
 - The silence gate no longer retains a level sample per frame outside `measure_only`, and reuses its output buffer, so the everyday path allocates nothing per chunk instead of 24 KB.
 

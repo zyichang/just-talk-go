@@ -3,6 +3,7 @@ package voice
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/c/just-talk-go/config"
 )
@@ -609,6 +610,59 @@ func TestGateShadowsDoNotRetainLevels(t *testing.T) {
 	// Projections must still be reported.
 	if len(gate.Projections()) != 2 {
 		t.Error("projections were lost")
+	}
+}
+
+// Auto-stop has to work with filtering switched off, so a user can have the
+// recording end itself without also changing what reaches the recognizer.
+func TestGateSilenceStopWorksWithFilteringOff(t *testing.T) {
+	cfg := testVAD()
+	cfg.Enabled = false
+	cfg.SilenceStopMs = 200 // ten frames
+	gate := newSilenceGate(cfg)
+
+	// Audio must pass through completely untouched.
+	in := silentPCM(5)
+	if out := gate.Filter(in); len(out) != len(in) {
+		t.Fatalf("gate altered the upload with filtering off: %d bytes, want %d",
+			len(out), len(in))
+	}
+	if gate.SilenceExceeded() {
+		t.Fatal("stopped after 100 ms, want it to wait for 200 ms")
+	}
+
+	gate.Filter(silentPCM(5)) // ten frames total
+	if !gate.SilenceExceeded() {
+		t.Fatalf("did not trigger after %v of silence", gate.SilentFor())
+	}
+	if got := gate.SilentFor(); got != 200*time.Millisecond {
+		t.Errorf("silent for %v, want 200ms", got)
+	}
+}
+
+func TestGateSilenceStopResetsOnSpeech(t *testing.T) {
+	cfg := testVAD()
+	cfg.SilenceStopMs = 200 // ten frames
+	gate := newSilenceGate(cfg)
+
+	gate.Filter(silentPCM(8))
+	gate.Filter(tonePCM(3, 0.3)) // speech interrupts the count
+	gate.Filter(silentPCM(8))
+	if gate.SilenceExceeded() {
+		t.Fatalf("triggered despite speech resetting the count (silent_for=%v)",
+			gate.SilentFor())
+	}
+	gate.Filter(silentPCM(3)) // now eleven consecutive silent frames
+	if !gate.SilenceExceeded() {
+		t.Fatal("did not trigger after the uninterrupted run")
+	}
+}
+
+func TestGateSilenceStopDisabledByDefault(t *testing.T) {
+	gate := newSilenceGate(testVAD())
+	gate.Filter(silentPCM(5000)) // 100 seconds
+	if gate.SilenceExceeded() {
+		t.Fatal("triggered with silence_stop_ms unset")
 	}
 }
 

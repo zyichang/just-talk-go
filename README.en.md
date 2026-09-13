@@ -208,6 +208,7 @@ min_speech_ms = 60       # how long the level must stay high to count as speech;
 pre_roll_ms = 200        # silence re-sent at speech onset, so word beginnings survive
 silence_keep_ms = 400    # lead of each pause kept, protecting word tails and punctuation
 heartbeat_ms = 3000      # frame interval through long pauses, so the connection is not idle. 0 disables
+silence_stop_ms = 0      # end the recording after this much silence. 0 disables; works even with enabled = false
 sweep_thresholds = []    # measure_only: project several candidate thresholds at once
 ```
 

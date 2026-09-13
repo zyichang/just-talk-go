@@ -3,6 +3,7 @@ package voice
 import (
 	"math"
 	"sort"
+	"time"
 
 	"github.com/c/just-talk-go/config"
 )
@@ -75,6 +76,7 @@ type silenceGate struct {
 	keepFrames      int
 	heartbeatEvery  int
 	minSpeechFrames int
+	silenceStopAt   int
 
 	calibrateFrames int
 	noiseFactor     float64
@@ -153,6 +155,7 @@ func newSilenceGate(cfg config.VADConfig) *silenceGate {
 		preRollFrames:  msToFrames(cfg.PreRollMs, frameMs),
 		keepFrames:     msToFrames(cfg.SilenceKeepMs, frameMs),
 		heartbeatEvery: msToFrames(cfg.HeartbeatMs, frameMs),
+		silenceStopAt:  msToFrames(cfg.SilenceStopMs, frameMs),
 		noiseFactor:    noiseFactor,
 		maxThreshold:   maxThreshold,
 		minThreshold:   minThreshold,
@@ -202,7 +205,7 @@ func newSilenceGate(cfg config.VADConfig) *silenceGate {
 // In measure-only mode every frame is still classified, so the summary reports
 // what the savings would have been, but the chunk is returned untouched.
 func (g *silenceGate) Filter(chunk []byte) []byte {
-	if !g.enabled || g.frameBytes <= 0 {
+	if !g.active() || g.frameBytes <= 0 {
 		return chunk
 	}
 	g.pending = append(g.pending, chunk...)
@@ -226,10 +229,34 @@ func (g *silenceGate) Filter(chunk []byte) []byte {
 	g.pending = g.pending[:n]
 	g.outBuf = out
 
-	if g.measureOnly {
+	// Pass the audio through untouched when the gate is only observing, either
+	// to gather statistics or purely to time the silence for auto-stop.
+	if g.measureOnly || !g.enabled {
 		return chunk
 	}
 	return out
+}
+
+// active reports whether any frame-level work is wanted. Silence timing needs
+// classification even when filtering is switched off.
+func (g *silenceGate) active() bool {
+	return g.enabled || g.measureOnly || g.silenceStopAt > 0
+}
+
+// SilenceExceeded reports that the level has stayed below the threshold for
+// longer than SilenceStopMs, so the recording should end.
+func (g *silenceGate) SilenceExceeded() bool {
+	return g.silenceStopAt > 0 && g.silentRun >= g.silenceStopAt
+}
+
+// SilentFor reports how long the current run of silence has lasted.
+func (g *silenceGate) SilentFor() time.Duration {
+	if g.frameBytes <= 0 {
+		return 0
+	}
+	perFrame := time.Duration(g.frameBytes) * time.Second /
+		time.Duration(pcmSampleRate*pcmBytesPerSample)
+	return time.Duration(g.silentRun) * perFrame
 }
 
 // classify decides the fate of exactly one frame.
